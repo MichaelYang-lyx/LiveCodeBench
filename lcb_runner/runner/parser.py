@@ -14,6 +14,12 @@ def get_args():
         help="Name of the model to use matching `lm_styles.py`",
     )
     parser.add_argument(
+        "--model_style",
+        type=str,
+        default=None,
+        help="LMStyle to use when model is not registered in lm_styles.py (e.g. OpenAIChat, Claude3, LLaMa3)",
+    )
+    parser.add_argument(
         "--local_model_path",
         type=str,
         default=None,

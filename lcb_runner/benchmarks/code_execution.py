@@ -2,8 +2,11 @@ import json
 from enum import Enum
 from datetime import datetime
 from dataclasses import dataclass
+from pathlib import Path
 
 from datasets import load_dataset
+
+_DATA_DIR = str(Path(__file__).resolve().parent.parent.parent / "data")
 
 
 @dataclass
@@ -57,7 +60,7 @@ class CodeExecutionProblem:
 
 
 def load_code_execution_dataset(release_version="release_v1") -> list[CodeExecutionProblem]:
-    dataset = load_dataset("livecodebench/execution-v2", split="test")
+    dataset = load_dataset("livecodebench/execution-v2", split="test", cache_dir=_DATA_DIR)
     dataset = [CodeExecutionProblem(**p) for p in dataset]  # type: ignore
     print(f"Loaded {len(dataset)} problems")
     return dataset

@@ -2,8 +2,11 @@ import json
 from enum import Enum
 from datetime import datetime
 from dataclasses import dataclass
+from pathlib import Path
 
 from datasets import load_dataset
+
+_DATA_DIR = str(Path(__file__).resolve().parent.parent.parent / "data")
 
 
 @dataclass
@@ -60,7 +63,7 @@ class TestOutputPredictionProblem:
 
 
 def load_test_prediction_dataset(release_version="release_v1") -> list[TestOutputPredictionProblem]:
-    dataset = load_dataset("livecodebench/test_generation", split="test")  # type: ignore
+    dataset = load_dataset("livecodebench/test_generation", split="test", cache_dir=_DATA_DIR)  # type: ignore
     dataset = [TestOutputPredictionProblem(**d) for d in dataset]
     print(f"Loaded {len(dataset)} prediction problems")
     return dataset

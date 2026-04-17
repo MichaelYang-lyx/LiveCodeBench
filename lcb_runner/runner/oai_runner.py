@@ -14,6 +14,7 @@ from lcb_runner.runner.base_runner import BaseRunner
 class OpenAIRunner(BaseRunner):
     client = OpenAI(
         api_key=os.getenv("OPENAI_KEY"),
+        base_url=os.getenv("OPENAI_API_BASE") or None,
     )
 
     def __init__(self, args, model):
@@ -27,10 +28,23 @@ class OpenAIRunner(BaseRunner):
             assert (
                 "__" in args.model
             ), f"Model {args.model} is not a valid OpenAI Reasoning model as we require reasoning effort in model name."
-            model, reasoning_effort = args.model.split("__")
+            model_id, reasoning_effort = args.model.split("__", 1)
+            STANDARD_EFFORTS = {"low", "medium", "high"}
+            if reasoning_effort in STANDARD_EFFORTS:
+                self.client_kwargs: dict[str | str] = {
+                    "model": model_id,
+                    "reasoning_effort": reasoning_effort,
+                }
+            else:
+                self.client_kwargs: dict[str | str] = {
+                    "model": model_id,
+                    "extra_body": {"reasoning_effort": reasoning_effort},
+                }
+        elif args.model.startswith("claude"):
             self.client_kwargs: dict[str | str] = {
-                "model": model,
-                "reasoning_effort": reasoning_effort,
+                "model": args.model,
+                "max_tokens": args.max_tokens,
+                "timeout": args.openai_timeout,
             }
         else:
             self.client_kwargs: dict[str | str] = {
@@ -76,4 +90,10 @@ class OpenAIRunner(BaseRunner):
             print(f"Failed to run the model for {prompt}!")
             print("Exception: ", repr(e))
             raise e
-        return [c.message.content for c in response.choices]
+        results = []
+        for c in response.choices:
+            content = c.message.content or ""
+            if not content and hasattr(c.message, "reasoning") and c.message.reasoning:
+                content = c.message.reasoning
+            results.append(content)
+        return results
