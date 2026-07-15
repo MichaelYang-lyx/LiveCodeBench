@@ -1,0 +1,165 @@
+"""逐条 token 用量落盘工具（sb3 注入，用于统计 token_stats / error_stats）。
+
+各生成线程通过 append_token_record() 向 LCB_TOKEN_RECORDS 指定的 jsonl 文件
+逐条追加记录。路径为空时静默跳过，不影响正常生成流程。
+
+token 计数口径与 sensebench 的 OpenAI_vLLM.token_count 对齐：
+优先用 usage 里的 reasoning_tokens；若 API 未提供（如 QwQ 只在 content 里用
+<think></think> 包裹思考），则把响应拆成 think / prediction 两段，分别用
+tiktoken 计数，避免把 reasoning 算进 prediction。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+
+_lock = threading.Lock()
+
+# 复用一个 cl100k_base 编码器做兜底计数
+try:
+    import tiktoken
+
+    _ENC = tiktoken.get_encoding("cl100k_base")
+except Exception:  # noqa: BLE001
+    _ENC = None
+
+
+def _records_path() -> str:
+    return os.getenv("LCB_TOKEN_RECORDS", "")
+
+
+def _get(obj, key):
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _tiktoken_len(text) -> int:
+    if not text or _ENC is None:
+        return 0
+    try:
+        return len(_ENC.encode(text))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _split_think(text):
+    """把响应文本拆成 (think_text, prediction_text)。
+
+    兼容 QwQ 等把思考写进 content 的场景：
+      - 含 </think>：前半为 think，后半为 prediction
+    无 think 标签时 think_text 为空、prediction 为整段。
+    """
+    if not text:
+        return "", ""
+    if "</think>" in text:
+        head, _, tail = text.partition("</think>")
+        head = head.replace("<think>", "")
+        return head, tail
+    return "", text
+
+
+def compute_tokens(usage, text=None, reasoning_text=None):
+    """计算 (input_tokens, prediction_tokens, think_tokens)。
+
+    Args:
+        usage: response.usage（可为 None）
+        text: 模型最终返回的完整文本（用于兜底拆分/计数）
+        reasoning_text: 若 API 单独提供了 reasoning_content，则传入
+    """
+    input_tokens = None
+    completion_tokens = None
+    reasoning_tokens = None
+
+    if usage is not None:
+        input_tokens = _get(usage, "prompt_tokens")
+        completion_tokens = _get(usage, "completion_tokens")
+        reasoning_tokens = _get(usage, "reasoning_tokens")
+        if reasoning_tokens is None:
+            details = _get(usage, "completion_tokens_details")
+            if details is not None:
+                reasoning_tokens = _get(details, "reasoning_tokens")
+
+    # 拆分 think / prediction 文本
+    if reasoning_text:
+        think_text = reasoning_text
+        pred_text = text or ""
+    else:
+        think_text, pred_text = _split_think(text)
+
+    # input：usage 没有则不兜底（保持 None），避免误算
+    # reasoning：usage 有则用；否则用 think 文本 tiktoken 兜底
+    if reasoning_tokens is None or reasoning_tokens == 0:
+        if think_text:
+            think_tokens = _tiktoken_len(think_text)
+            # usage 的 completion 含 reasoning，弃用，改由 prediction 文本兜底
+            completion_tokens = None
+        else:
+            think_tokens = 0
+    else:
+        think_tokens = reasoning_tokens
+        # usage 提供了 reasoning，从 completion 中扣除得到纯 prediction
+        if completion_tokens is not None and completion_tokens >= reasoning_tokens:
+            completion_tokens = completion_tokens - reasoning_tokens
+
+    # prediction：completion 可用则用；否则用 prediction 文本 tiktoken 兜底
+    if completion_tokens is None:
+        prediction_tokens = _tiktoken_len(pred_text) if pred_text else 0
+    else:
+        prediction_tokens = completion_tokens
+
+    return input_tokens, prediction_tokens, think_tokens
+
+
+def append_token_record(
+    input_tokens=None,
+    prediction_tokens=None,
+    think_tokens=None,
+    is_error: bool = False,
+    is_empty: bool = False,
+) -> None:
+    """线程安全地向 token_records.jsonl 追加一条记录。任何异常都被吞掉。"""
+    path = _records_path()
+    if not path:
+        return
+    rec = {
+        "input_tokens": input_tokens,
+        "prediction_tokens": prediction_tokens,
+        "think_tokens": think_tokens,
+        "is_error": bool(is_error),
+        "is_empty": bool(is_empty),
+    }
+    try:
+        line = json.dumps(rec, ensure_ascii=False)
+        with _lock:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def record_response(usage, text=None, reasoning_text=None):
+    """便捷入口：从 usage + 文本算 token 并落盘（含 error/empty 判定）。"""
+    try:
+        input_tokens, prediction_tokens, think_tokens = compute_tokens(
+            usage, text=text, reasoning_text=reasoning_text
+        )
+        stripped = (text or "").strip()
+        is_empty = stripped == ""
+        is_error = stripped.upper().startswith("ERROR")
+        append_token_record(
+            input_tokens=input_tokens,
+            prediction_tokens=prediction_tokens,
+            think_tokens=think_tokens,
+            is_error=is_error,
+            is_empty=is_empty,
+        )
+    except Exception:
+        pass
+
+
+# 向后兼容旧名字
+def extract_usage_tokens(usage):
+    return compute_tokens(usage, text=None, reasoning_text=None)

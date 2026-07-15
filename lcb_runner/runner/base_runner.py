@@ -46,7 +46,12 @@ class BaseRunner(ABC):
         prompt: str | list[dict[str, str]]
         cache: dict[str, str]
         call_method: callable
-        prompt, cache, args, call_method = combined_args
+        # 兼容 4 元 tuple
+        if len(combined_args) == 5:
+            prompt, cache, args, call_method, task_id = combined_args
+        else:
+            prompt, cache, args, call_method = combined_args
+            task_id = None
 
         if isinstance(prompt, list):
             prompt_cache = json.dumps(prompt)
@@ -59,12 +64,20 @@ class BaseRunner(ABC):
             if len(cache[prompt_cache]) == args.n:
                 return cache[prompt_cache]
 
-        result = call_method(prompt)
+        # task_id 透传给 _run_single（无则不传，避免子类未升级时报 unexpected kwarg）
+        if task_id is not None:
+            result = call_method(prompt, task_id=task_id)
+        else:
+            result = call_method(prompt)
         assert len(result) == args.n
 
         return result
 
-    def run_batch(self, prompts: list[str | list[dict[str, str]]]) -> list[list[str]]:
+    def run_batch(
+        self,
+        prompts: list[str | list[dict[str, str]]],
+        task_ids: list[str] | None = None,
+    ) -> list[list[str]]:
         outputs = []
         arguments = [
             (
@@ -72,8 +85,9 @@ class BaseRunner(ABC):
                 self.cache,  ## pass the cache as argument for cache check
                 self.args,  ## pass the args as argument for cache check
                 self._run_single,  ## pass the _run_single method as argument because of multiprocessing
+                task_ids[idx] if task_ids is not None else None,  # v2: sample_id 透传
             )
-            for prompt in prompts
+            for idx, prompt in enumerate(prompts)
         ]
         if self.args.multiprocess > 1:
             parallel_outputs = run_tasks_in_parallel(
@@ -106,18 +120,23 @@ class BaseRunner(ABC):
         return outputs
 
     def prompts_to_outputs(
-        self, prompts: list[str | list[dict[str, str]]]
+        self,
+        prompts: list[str | list[dict[str, str]]],
+        task_ids: list[str] | None = None,
     ) -> list[list[str]]:
         if self.args.use_cache:
             outputs = []
             batch_size = self.args.cache_batch_size
             for i in range(0, len(prompts), batch_size):
                 batch = prompts[i : i + batch_size]
-                batch_outputs = self.run_batch(batch)
+                batch_task_ids = (
+                    task_ids[i : i + batch_size] if task_ids is not None else None
+                )
+                batch_outputs = self.run_batch(batch, task_ids=batch_task_ids)
                 outputs.extend(batch_outputs)
                 self.save_cache()
         else:
-            outputs = self.run_batch(prompts)
+            outputs = self.run_batch(prompts, task_ids=task_ids)
         return outputs
 
     def run_main_repair(self, benchmark: list, format_prompt: callable) -> list[list[str]]:
@@ -172,10 +191,23 @@ class BaseRunner(ABC):
 
     def run_main(self, benchmark: list, format_prompt: callable) -> list[list[str]]:
         if self.args.scenario == Scenario.selfrepair:
+            # selfrepair 走另一路径，不加 sample_id（保持 legacy 无 sid 行为）
             return self.run_main_repair(benchmark, format_prompt)
 
         prompts = [
             format_prompt(problem, self.model.model_style) for problem in benchmark
         ]
-        outputs = self.prompts_to_outputs(prompts)
+        # 生成 task_ids，格式 "{scenario}:{question_id}"，让 token_records 里的
+        # sample_id 天然按 scenario 前缀分组（codegeneration / testoutputprediction /
+        # codeexecution 各自独立），实际 per-choice 后缀 #i 在 oai_runner 里再拼。
+        scenario_str = (
+            self.args.scenario.value
+            if hasattr(self.args.scenario, "value")
+            else str(self.args.scenario)
+        )
+        task_ids = [
+            f"{scenario_str}:{getattr(problem, 'question_id', idx)}"
+            for idx, problem in enumerate(benchmark)
+        ]
+        outputs = self.prompts_to_outputs(prompts, task_ids=task_ids)
         return outputs

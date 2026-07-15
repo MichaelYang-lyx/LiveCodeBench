@@ -101,6 +101,11 @@ def get_args():
         "--openai_timeout", type=int, default=90, help="Timeout for requests to OpenAI"
     )
     parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Use streaming responses for OpenAI-compatible chat models",
+    )
+    parser.add_argument(
         "--tensor_parallel_size",
         type=int,
         default=-1,
