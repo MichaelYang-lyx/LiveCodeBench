@@ -119,6 +119,7 @@ def append_token_record(
     think_tokens=None,
     is_error: bool = False,
     is_empty: bool = False,
+    sample_id: str | None = None,
 ) -> None:
     """线程安全地向 token_records.jsonl 追加一条记录。任何异常都被吞掉。"""
     path = _records_path()
@@ -131,6 +132,8 @@ def append_token_record(
         "is_error": bool(is_error),
         "is_empty": bool(is_empty),
     }
+    if sample_id is not None:
+        rec["sample_id"] = str(sample_id)
     try:
         line = json.dumps(rec, ensure_ascii=False)
         with _lock:
@@ -140,8 +143,11 @@ def append_token_record(
         pass
 
 
-def record_response(usage, text=None, reasoning_text=None):
-    """便捷入口：从 usage + 文本算 token 并落盘（含 error/empty 判定）。"""
+def record_response(usage, text=None, reasoning_text=None, sample_id: str | None = None):
+    """便捷入口：从 usage + 文本算 token 并落盘（含 error/empty 判定）。
+
+    sample_id (v2 新增): 样本唯一 id，用于 reuse 场景下按 id 去重。
+    """
     try:
         input_tokens, prediction_tokens, think_tokens = compute_tokens(
             usage, text=text, reasoning_text=reasoning_text
@@ -155,6 +161,7 @@ def record_response(usage, text=None, reasoning_text=None):
             think_tokens=think_tokens,
             is_error=is_error,
             is_empty=is_empty,
+            sample_id=sample_id,
         )
     except Exception:
         pass
