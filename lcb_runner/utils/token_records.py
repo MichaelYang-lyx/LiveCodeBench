@@ -144,10 +144,7 @@ def append_token_record(
 
 
 def record_response(usage, text=None, reasoning_text=None, sample_id: str | None = None):
-    """便捷入口：从 usage + 文本算 token 并落盘（含 error/empty 判定）。
-
-    sample_id (v2 新增): 样本唯一 id，用于 reuse 场景下按 id 去重。
-    """
+    """便捷入口：从 usage + 文本算 token 并落盘（含 error/empty 判定）。"""
     try:
         input_tokens, prediction_tokens, think_tokens = compute_tokens(
             usage, text=text, reasoning_text=reasoning_text

@@ -1,3 +1,4 @@
+import json
 import os
 from time import sleep
 
@@ -58,6 +59,14 @@ class OpenAIRunner(BaseRunner):
                 "n": args.n,
                 "timeout": args.openai_timeout,
                 # "stop": args.stop, --> stop is only used for base models currently
+            }
+        extra_body = getattr(args, "extra_body", None)
+        if extra_body:
+            parsed_extra_body = json.loads(extra_body)
+            existing_extra_body = self.client_kwargs.get("extra_body") or {}
+            self.client_kwargs["extra_body"] = {
+                **existing_extra_body,
+                **parsed_extra_body,
             }
 
     def _run_single(self, prompt: list[dict[str, str]], n: int = 10, task_id: str | None = None) -> list[str]:

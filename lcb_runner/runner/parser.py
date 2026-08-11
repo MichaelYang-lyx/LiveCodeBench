@@ -101,6 +101,12 @@ def get_args():
         "--openai_timeout", type=int, default=90, help="Timeout for requests to OpenAI"
     )
     parser.add_argument(
+        "--extra-body",
+        dest="extra_body",
+        default=None,
+        help="JSON object passed to OpenAI-compatible chat completions as extra_body",
+    )
+    parser.add_argument(
         "--stream",
         action="store_true",
         help="Use streaming responses for OpenAI-compatible chat models",
